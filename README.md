@@ -92,4 +92,4 @@ M x_ddot + D x_dot + K x = F_ext
 
 ## 注意
 
-如果机械臂在 Isaac Sim 中仍然趴下，说明底层 articulation drive / effort mode / 重力补偿之间还没有配合好。这个工程只是把控制程序模块化，不会自动修复物理仿真参数不匹配问题。
+如果机械臂在 Isaac Sim 中仍然趴下，说明底层 articulation drive / effort mode / 重力补偿之间还没有配合好。这个工程把控制程序模块化，不会自动修复物理仿真参数不匹配问题。
