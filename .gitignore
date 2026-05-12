@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+
+# VSCode
+.vscode/
+!.vscode/settings.json
+
+# Logs
+*.log
+logs/
+*.bag
+*.db3
+
+# ROS2 / colcon
+build/
+install/
+log/
+
+# Cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Zip / compressed files
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# Isaac Sim / generated
+*.usd~
+*.bak
+*.tmp
+
+# Secrets / configs
+.env
+*.key
+*.pem
+token*
+secret*
