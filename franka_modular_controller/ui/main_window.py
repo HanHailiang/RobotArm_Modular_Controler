@@ -42,7 +42,7 @@ class CartesianNullspaceWindow(QMainWindow):
     """
 
     MODE_POSE_IK = "Pose IK Jog"
-    MODE_TWIST = "Twist Jog"
+    MODE_TWIST = "Twist Velocity Jog"
 
     def __init__(
         self,
@@ -623,7 +623,17 @@ class CartesianNullspaceWindow(QMainWindow):
 
     def on_control_mode_changed(self, mode: str) -> None:
         self.stop_jog()
-        self.status_label.setText(f"Control mode changed to: {mode}")
+
+        if mode == self.MODE_TWIST:
+            self.twist_q_target = None
+            self.hold_position_box.setChecked(False)
+            self.status_label.setText(
+                "Control mode changed to Twist Velocity Jog. "
+                "Hold Position disabled."
+            )
+        else:
+            self.ros_node.publish_zero_velocity()
+            self.status_label.setText(f"Control mode changed to: {mode}")
 
     # ============================================================
     # Jog 控制入口
@@ -645,6 +655,12 @@ class CartesianNullspaceWindow(QMainWindow):
 
         if self.jog_timer.isActive():
             self.jog_timer.stop()
+
+        # 真正速度控制模式下，松开按钮必须发零速度
+        mode = self.control_mode_box.currentText()
+        if mode == self.MODE_TWIST:
+            self.ros_node.publish_zero_velocity()
+            self.status_label.setText("Jog stopped. Published zero velocity command.")
 
     def on_jog_timer_tick(self) -> None:
         if self.active_jog_axis is None:
@@ -696,75 +712,85 @@ class CartesianNullspaceWindow(QMainWindow):
     # Twist Jog
     # ============================================================
 
-    # ============================================================
-    # Twist Jog
-    # ============================================================
-
     def _do_twist_jog(self, axis: str, direction: float) -> None:
+        """
+        真正速度控制版 Twist Jog。
+
+        控制链路：
+
+            UI 按钮 X+/Y-/Rz+
+                ↓
+            生成末端 twist = [vx, vy, vz, wx, wy, wz]
+                ↓
+            CartesianTwistController.solve()
+                ↓
+            Jacobian 阻尼伪逆计算 dq_cmd
+                ↓
+            ros_node.publish_velocity(dq_cmd)
+
+        注意：
+        这里不再积分 q_target。
+        这里不再 publish_position。
+        """
+
         result = self.get_current_q_dq()
         if result is None:
             self.status_label.setText("Cannot twist jog: no valid current joint state.")
             return
 
-        q_current, _ = result
-
-        if self.twist_q_target is None:
-            self.twist_q_target = q_current.copy()
-
-        tracking_err = float(np.linalg.norm(self.twist_q_target - q_current))
-
-        if tracking_err > 0.5:
-            self.twist_q_target = q_current.copy()
-            tracking_err = 0.0
+        q_current, dq_current = result
 
         twist = self._make_twist(axis, direction)
-        if twist is None:
-            self.status_label.setText(f"Unknown twist jog axis: {axis}")
-            return
 
         twist_result = self.twist_controller.solve(
             q_current=q_current,
             twist=twist,
-            q_integrator=self.twist_q_target,
+            q_integrator=None,
         )
 
-        if not twist_result.success:
-            self.ik_result_label.setText(f"Twist failed: {twist_result.message}")
-            self.status_label.setText(twist_result.message)
+        if not twist_result.success or twist_result.dq_cmd is None:
+            self.ik_result_label.setText(
+                f"Twist success={twist_result.success}, "
+                f"message={twist_result.message}"
+            )
+            self.status_label.setText("Twist solve failed.")
+            self.ros_node.publish_zero_velocity()
             return
 
-        if twist_result.q_target is None:
-            self.status_label.setText("Twist result has no q_target.")
-            return
+        dq_cmd = twist_result.dq_cmd.copy()
 
-        self.twist_q_target = twist_result.q_target.copy()
-        self.q_goal = self.twist_q_target.copy()
+        # 关键修改：
+        # 这里直接发布关节速度命令，而不是发布积分后的位置命令。
+        self.ros_node.publish_velocity(dq_cmd.tolist())
 
-        self.ros_node.publish_position(self.q_goal.tolist())
+        # 这里只用于 UI 显示，不再作为控制目标
+        self.q_goal = None
+        self.twist_q_target = None
 
-        twist_text = ", ".join([f"{v:.3f}" for v in twist])
+        desired_twist = twist
+        achieved_twist = (
+            twist_result.achieved_twist
+            if twist_result.achieved_twist is not None
+            else np.zeros(6)
+        )
 
-        if twist_result.dq_cmd is not None:
-            dq_text = ", ".join([f"{v:.3f}" for v in twist_result.dq_cmd])
-        else:
-            dq_text = "-"
-
-        if twist_result.achieved_twist is not None:
-            achieved_text = ", ".join([f"{v:.3f}" for v in twist_result.achieved_twist])
-        else:
-            achieved_text = "-"
+        # 如果 /joint_states 有真实 dq，可以估算当前真实末端速度
+        try:
+            J = self.pose_ik_controller.kin.geometric_jacobian(q_current)
+            actual_twist = J @ dq_current
+        except Exception:
+            actual_twist = np.zeros(6)
 
         self.ik_result_label.setText(
-            f"Twist success=True, "
-            f"desired=[{twist_text}], "
-            f"achieved=[{achieved_text}], "
-            f"dq=[{dq_text}], "
-            f"tracking_err={tracking_err:.4f}"
+            "Velocity Twist Jog | "
+            f"axis={axis}, dir={direction:+.0f}, "
+            f"dq_cmd=[{', '.join([f'{v:+.3f}' for v in dq_cmd])}], "
+            f"desired_twist=[{', '.join([f'{v:+.3f}' for v in desired_twist])}], "
+            f"achieved_twist=[{', '.join([f'{v:+.3f}' for v in achieved_twist])}], "
+            f"actual_twist=[{', '.join([f'{v:+.3f}' for v in actual_twist])}]"
         )
 
-        self.status_label.setText(
-            f"Twist Jog {axis} {'+' if direction > 0 else '-'} published q_target."
-        )
+        self.status_label.setText("Published joint velocity command.")
 
 
     def _make_twist(self, axis: str, direction: float) -> Optional[np.ndarray]:
@@ -801,7 +827,19 @@ class CartesianNullspaceWindow(QMainWindow):
     # ============================================================
 
     def publish_hold_target(self) -> None:
+        """
+        位置保持发布。
+
+        注意：
+        真正速度控制模式下，不应该反复发布 q_goal position，
+        否则会和 velocity command 冲突。
+        """
+
         if not self.hold_position_box.isChecked():
+            return
+
+        mode = self.control_mode_box.currentText()
+        if mode == self.MODE_TWIST:
             return
 
         if self.q_goal is None:

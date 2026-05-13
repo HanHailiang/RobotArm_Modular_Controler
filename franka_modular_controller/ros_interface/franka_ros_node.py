@@ -120,6 +120,55 @@ class FrankaRosNode(Node):
         cmd.effort = []
         self.publisher.publish(cmd)
 
+
+    def publish_zero_velocity(self) -> None:
+        """
+        发布零速度命令。
+
+        速度控制模式下，松开 Jog 按钮时必须调用这个函数，
+        否则底层可能继续保持上一帧速度命令。
+        """
+        self.publish_velocity([0.0] * len(self.robot_cfg.joint_names))
+    # ============================================================
+    # Velocity Command
+    # ============================================================
+
+    def publish_velocity(self, velocity: List[float]) -> None:
+        """
+        发布关节速度命令。
+
+        这是这次真正速度控制的关键接口。
+
+        发布内容：
+
+            name     = 关节名
+            position = []
+            velocity = dq_cmd
+            effort   = []
+
+        对应 Isaac Sim ROS2 Graph：
+
+            ROS2SubscribeJointState.outputs:velocityCommand
+                    ↓
+            IsaacArticulationController.inputs:velocityCommand
+        """
+
+        if len(velocity) != len(self.robot_cfg.joint_names):
+            self.get_logger().error(
+                f"Velocity command length mismatch: "
+                f"got {len(velocity)}, expected {len(self.robot_cfg.joint_names)}"
+            )
+            return
+
+        cmd = JointState()
+        cmd.header.stamp = self.get_clock().now().to_msg()
+        cmd.name = self.robot_cfg.joint_names
+
+        cmd.position = []
+        cmd.velocity = [float(v) for v in velocity]
+        cmd.effort = []
+
+        self.publisher.publish(cmd)
     def joint_state_callback(self, msg: JointState) -> None:
         """
         /joint_states 回调函数。

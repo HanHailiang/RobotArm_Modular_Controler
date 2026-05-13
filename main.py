@@ -1,3 +1,11 @@
+# source /opt/ros/humble/setup.bash
+
+# export ROS_DISTRO=humble
+# export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+# export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PWD/exts/isaacsim.ros2.bridge/humble/lib
+
+# ./python.sh ~/Project/VS_Project/Franka/main.py
+
 from isaacsim import SimulationApp
 
 # 必须最先创建 SimulationApp
@@ -25,6 +33,88 @@ from pxr import UsdPhysics
 
 from isaacsim.core.api import World
 from isaacsim.robot.manipulators.examples.franka import Franka
+
+
+
+def set_franka_drive_to_velocity_mode(
+    franka_prim_path: str = "/World/Franka",
+    stiffness: float = 0.0,
+    damping: float = 500.0,
+    max_force: float = 1000.0,
+):
+    """
+    将 Franka 关节 drive 设置成更适合 velocity command 的模式。
+
+    stiffness = 0:
+        关闭位置弹簧，避免 position drive 把关节拉回 target position。
+
+    damping > 0:
+        velocity target 主要通过 damping 产生速度伺服效果。
+
+    max_force:
+        drive 最大输出力矩，太小会导致速度命令推不动机械臂。
+    """
+
+    stage = omni.usd.get_context().get_stage()
+
+    joint_count = 0
+    angular_drive_count = 0
+    linear_drive_count = 0
+
+    print("Setting Franka joint drives to VELOCITY mode...")
+    print(f"Target robot prim: {franka_prim_path}")
+
+    for prim in stage.Traverse():
+        prim_path = str(prim.GetPath())
+
+        if not prim_path.startswith(franka_prim_path):
+            continue
+
+        type_name = prim.GetTypeName()
+
+        if "Joint" not in type_name:
+            continue
+
+        joint_count += 1
+        print(f"[Joint] {prim_path}, type={type_name}")
+
+        try:
+            angular_drive = UsdPhysics.DriveAPI.Apply(prim, "angular")
+            angular_drive.CreateStiffnessAttr().Set(float(stiffness))
+            angular_drive.CreateDampingAttr().Set(float(damping))
+            angular_drive.CreateMaxForceAttr().Set(float(max_force))
+
+            print(
+                f"  angular velocity drive set: "
+                f"stiffness={stiffness}, "
+                f"damping={damping}, "
+                f"max_force={max_force}"
+            )
+            angular_drive_count += 1
+
+        except Exception as e:
+            print(f"  angular drive skipped: {e}")
+
+        try:
+            linear_drive = UsdPhysics.DriveAPI.Apply(prim, "linear")
+            linear_drive.CreateStiffnessAttr().Set(float(stiffness))
+            linear_drive.CreateDampingAttr().Set(float(damping))
+            linear_drive.CreateMaxForceAttr().Set(float(max_force))
+
+            print(
+                f"  linear velocity drive set: "
+                f"stiffness={stiffness}, "
+                f"damping={damping}, "
+                f"max_force={max_force}"
+            )
+            linear_drive_count += 1
+
+        except Exception:
+            pass
+
+    print(f"Total joint prims found: {joint_count}")
+    print(f"Angular drives modified: {angular_drive_count}")
+    print(f"Linear drives modified: {linear_drive_count}")
 
 def set_franka_drive_to_effort_mode(
     franka_prim_path: str = "/World/Franka",
@@ -180,13 +270,22 @@ def main():
     )
 
     # 关键：关闭 Franka 关节 position drive
-    # 这样 /joint_command.effort 才更接近纯力矩控制
-    set_franka_drive_to_effort_mode(
+    # # 这样 /joint_command.effort 才更接近纯力矩控制
+    # set_franka_drive_to_effort_mode(
+    #     franka_prim_path="/World/Franka",
+    #     stiffness=20.0,
+    #     damping=5.0,
+    #     max_force=1000.0,
+    # )
+
+    set_franka_drive_to_velocity_mode(
         franka_prim_path="/World/Franka",
-        stiffness=20.0,
+        stiffness=2.0,
         damping=5.0,
         max_force=1000.0,
     )
+
+
     # 初始化仿真
     world.reset()
 
