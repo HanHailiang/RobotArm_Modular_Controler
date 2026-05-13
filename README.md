@@ -389,76 +389,8 @@ publish_position(q_target)
 
 ---
 
-## 6. 当前是否是真正的速度控制？
 
-不是。
-
-当前代码确实计算了末端速度对应的关节速度：
-
-```python
-dq_cmd = J.T @ solve(J @ J.T + damping² I, twist)
-```
-
-但最终执行时调用的是：
-
-```python
-self.ros_node.publish_position(self.q_goal.tolist())
-```
-
-也就是发布：
-
-```python
-cmd.position = list(position)
-cmd.velocity = []
-cmd.effort = []
-```
-
-所以当前执行链路是：
-
-```text
-末端 Twist
-   ↓
-关节速度 dq_cmd
-   ↓
-积分成关节位置 q_target
-   ↓
-发布 JointState.position
-```
-
-如果要改成真正的速度控制，应该变成：
-
-```text
-末端 Twist
-   ↓
-关节速度 dq_cmd
-   ↓
-发布 velocity command
-```
-
-例如增加：
-
-```python
-def publish_velocity(self, velocity):
-    cmd = JointState()
-    cmd.header.stamp = self.get_clock().now().to_msg()
-    cmd.name = self.robot_cfg.joint_names
-    cmd.position = []
-    cmd.velocity = list(velocity)
-    cmd.effort = []
-    self.publisher.publish(cmd)
-```
-
-然后在 Twist Jog 中改为：
-
-```python
-self.ros_node.publish_velocity(twist_result.dq_cmd.tolist())
-```
-
-但前提是 Isaac Sim 或 ros2_control 底层真的接收并执行 `velocity` 字段。
-
----
-
-## 7. Isaac Sim 启动脚本
+## 6. Isaac Sim 启动脚本
 
 根目录下的 `main.py` 用于启动 Isaac Sim 仿真。主要流程：
 
@@ -502,9 +434,9 @@ IsaacArticulationController.inputs:effortCommand
 
 ---
 
-## 8. 运行方法
+## 7. 运行方法
 
-### 8.1 启动 Isaac Sim 仿真
+### 7.1 启动 Isaac Sim 仿真
 
 在 Isaac Sim 环境中运行根目录 `main.py`：
 
@@ -538,7 +470,7 @@ ros2 topic echo /joint_states
 
 ---
 
-### 8.2 启动 PyQt6 控制界面
+### 7.2 启动 PyQt6 控制界面
 
 进入控制器目录：
 
@@ -557,9 +489,9 @@ python3 main.py
 
 ---
 
-## 9. 使用说明
+## 8. 使用说明
 
-### 9.1 基础操作
+### 8.1 基础操作
 
 1. 先启动 Isaac Sim 仿真；
 2. 确认 `/joint_states` 正常发布；
@@ -571,7 +503,7 @@ python3 main.py
 
 ---
 
-### 9.2 UI 控件说明
+### 8.2 UI 控件说明
 
 | 控件 | 作用 |
 |---|---|
@@ -590,110 +522,7 @@ python3 main.py
 
 ---
 
-## 10. 重要注意事项
-
-### 10.1 关节名必须一致
-
-如果 `/joint_states` 中的关节名是：
-
-```text
-fr3_joint1 ... fr3_joint7
-```
-
-则配置文件也必须使用：
-
-```text
-fr3_joint1 ... fr3_joint7
-```
-
-如果 Isaac Sim 加载的是 Panda，并发布：
-
-```text
-panda_joint1 ... panda_joint7
-```
-
-则配置文件也必须保持 Panda 命名。
-
----
-
-### 10.2 当前不是标准 ros2_control 架构
-
-当前 `/joint_command` 使用的是 `sensor_msgs/JointState`。这适合 Isaac Sim ROS2 Bridge 的 `ROS2SubscribeJointState` 节点，但不是标准 ros2_control 的常见控制接口。
-
-标准 ros2_control 常见接口包括：
-
-```text
-trajectory_msgs/JointTrajectory
-control_msgs/action/FollowJointTrajectory
-std_msgs/Float64MultiArray
-```
-
-如果后续接真实机械臂或标准 ros2_control，需要改造 ROS 通信层。
-
----
-
-### 10.3 Zero Effort 不等于保持位置
-
-`Zero Effort` 会发布：
-
-```text
-effort = [0, 0, 0, 0, 0, 0, 0]
-```
-
-如果底层是 effort 模式，机械臂可能受重力下坠。如果底层是 position drive，这个命令未必能覆盖 position command 的效果。
-
----
-
-### 10.4 Twist Jog 的 achieved_twist 是理论值
-
-当前 UI 中显示的 `achieved_twist` 来自：
-
-```python
-achieved_twist = J @ dq_cmd
-```
-
-这是理论计算值，不是从实际关节速度反馈出来的真实末端速度。
-
-如需显示真实末端速度，应使用：
-
-```python
-actual_twist = J(q_current) @ dq_current
-```
-
----
-
-## 11. 后续改进方向
-
-### 11.1 增加真正的 velocity command
-
-新增：
-
-```python
-publish_velocity(dq_cmd)
-```
-
-然后 Twist Jog 直接发布 `dq_cmd`，不再积分成 `q_target`。
-
----
-
-### 11.2 接入 ros2_control velocity controller
-
-可考虑使用：
-
-```text
-forward_velocity_controller
-joint_group_velocity_controller
-```
-
-控制链路变成：
-
-```text
-Twist → dq_cmd → velocity controller → robot
-```
-
----
-
-### 11.3 接入 MoveIt Servo
+### 9.3 接入 MoveIt Servo
 
 如果目标是成熟稳定的 Jog 控制，可以考虑使用 MoveIt Servo，由其处理：
 
@@ -706,7 +535,7 @@ Twist → dq_cmd → velocity controller → robot
 
 ---
 
-### 11.4 改进 IK 姿态误差
+### 9.4 改进 IK 姿态误差
 
 当前 IK 的姿态误差使用 RPY 差值。后续可改为：
 
@@ -720,7 +549,7 @@ quaternion error
 
 ---
 
-### 11.5 增加真实速度反馈显示
+### 9.5 增加真实速度反馈显示
 
 建议 UI 中同时显示：
 
@@ -734,7 +563,7 @@ actual_twist = J @ dq_current
 
 ---
 
-## 12. 当前版本控制能力总结
+## 9. 当前版本控制能力总结
 
 | 能力 | 当前状态 |
 |---|---|
@@ -754,7 +583,7 @@ actual_twist = J @ dq_current
 
 ---
 
-## 13. 项目一句话说明
+## 13. 项目说明
 
 中文：
 
